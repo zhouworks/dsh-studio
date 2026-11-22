@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <title>个性化工作台</title>
+  <g fill="#78768E">
+    <rect x="2" y="3" width="7.5" height="19" rx="1.75"/>
+    <rect x="11.5" y="14" width="10" height="8" rx="1.75"/>
+  </g>
+  <rect x="12" y="2" width="9.5" height="9.5" rx="2" fill="#E37825"
+        transform="rotate(-10 16.75 6.75)"/>
+</svg>

@@ -1,0 +1,4 @@
+# 载入 dsh-studio 的 Host 入口；浏览器半部由 package.json 的 dsh.client 声明加载。
+- insert:
+    - id: dsh-studio
+      name: dsh-studio

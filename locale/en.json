@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Harness Studio",
+    "description": "Adds a Harness Studio entry (工作台 in Chinese) to the left sidebar. Its page groups skills into global skills, registered by host-level plugins, and user skills, discovered in user-level skill directories. It also has two status switches for the bottom-left corner, above the account row: the DeepSeek pricing period (peak or off-peak, following the official peak/off-peak rule with the 2026–2027 Chinese holiday calendar) and the current account balance (topped-up plus granted wallets, read through DSH's account remote). Skill data and switch state are read locally through read-only endpoints that accept only same-origin requests carrying the authenticated DSH browser session; switch state is stored under the DSH home and the balance stays in memory. No model request is added and nothing is sent elsewhere."
+  }
+}
