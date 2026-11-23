@@ -25,8 +25,8 @@ window.__ModuleLoader__.load({
     const DIAGNOSTIC_ENDPOINT = '/dsh-studio/diagnostic';
     /** 余额自动更新间隔的可选项（毫秒）；0 表示关闭。与 Host 侧校验保持一致。 */
     const BALANCE_REFRESH_OPTIONS = [0, 10000, 30000, 60000, 300000];
-    /** 内置主题皮肤：default 跟随 DSH 主题，sea 使用「浅海晨汐」。 */
-    const THEME_SKIN_OPTIONS = ['default', 'sea'];
+    /** 内置主题皮肤：default 跟随 DSH 主题，sea 为浅海晨汐，night 为深海夜航。 */
+    const THEME_SKIN_OPTIONS = ['default', 'sea', 'night'];
     /**
      * 账户 Remote 需要的客户端版本号。DSH 自带客户端从构建变量读取，
      * 手写 bundle 没有该变量，这里给一个固定的语义化版本用于 x-client-version 头。
@@ -150,11 +150,12 @@ window.__ModuleLoader__.load({
       'balance.autoRefresh': '自动更新',
       'balance.autoHint': '按固定间隔自动刷新；关闭时仅手动读取。',
       'theme.viewTitle': '主题',
-      'theme.viewDesc': '内置浅色主题「浅海晨汐」：浅海底色、青绿强调色与侧栏海底等深线；选择「默认」可回到 DSH 当前主题。',
+      'theme.viewDesc': '「浅海晨汐」和「深海夜航」共用侧栏等深线，可在浅色和深色之间切换。',
       'theme.skinLabel': '主题皮肤',
-      'theme.skinHint': '「浅海晨汐」为浅色皮肤，会覆盖 DSH 当前主题的颜色 token。',
+      'theme.skinHint': '选择「默认」可跟随 Harness 的外观设置。',
       'theme.skinDefault': '默认（跟随 DSH）',
       'theme.skinSea': '浅海晨汐',
+      'theme.skinNight': '深海夜航',
       'balance.autoOff': '关闭',
       'balance.auto10s': '10 秒',
       'balance.auto30s': '30 秒',
@@ -254,11 +255,12 @@ window.__ModuleLoader__.load({
       'balance.autoRefresh': 'Auto refresh',
       'balance.autoHint': 'Refresh automatically at a fixed interval; off means manual only.',
       'theme.viewTitle': 'Theme',
-      'theme.viewDesc': 'A built-in light theme, Sea Tide: shallow-sea tones, teal accents and bathymetric contours in the sidebar. Pick Default to return to the current DSH theme.',
+      'theme.viewDesc': 'Choose Sea Tide for a light palette or Deep Sea Voyage for a dark palette. Both feature bathymetric contours in the sidebar.',
       'theme.skinLabel': 'Theme skin',
-      'theme.skinHint': 'Sea Tide is a light skin; it overrides the current DSH theme colors.',
+      'theme.skinHint': 'Choose Default to follow the Harness appearance setting.',
       'theme.skinDefault': 'Default (follow DSH)',
       'theme.skinSea': 'Sea Tide',
+      'theme.skinNight': 'Deep Sea Voyage',
       'balance.autoOff': 'Off',
       'balance.auto10s': '10 seconds',
       'balance.auto30s': '30 seconds',
@@ -1825,14 +1827,20 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ [key]: value }),
           });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          if (!response.ok) {
+            let detail = `HTTP ${response.status}`;
+            try {
+              const payload = await response.json();
+              if (payload !== null && typeof payload === 'object' && typeof payload.error === 'string') detail = payload.error;
+            } catch {}
+            throw new Error(detail);
+          }
           patch({ status: 'ready', ...applyPayload(await response.json()), saving: false, error: undefined });
         } catch (error) {
-          patch({
-            [key]: previous,
-            saving: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          const message = error instanceof Error ? error.message : String(error);
+          patch({ [key]: previous, saving: false, error: message });
+          // 设置保存失败也写一份诊断日志，便于排查 Host 校验或连接问题。
+          reportClientError(`settings-save:${key}`, error);
         }
       };
       return {
@@ -2065,16 +2073,31 @@ window.__ModuleLoader__.load({
 
     /** 主题皮肤样式元素与根标记（页面里只保留一份）。 */
     const SKIN_STYLE_ID = 'dsh-studio-skin-style';
-    const SKIN_ATTR = 'data-dsh-studio-sea';
+    const SKIN_ATTR = 'data-dsh-studio-skin';
+    /** 宿主自身的外观是否为深色：皮肤切换时据此恢复或覆盖。 */
+    let hostColorSchemeDark = false;
+    /**
+     * 让 body 的深色标记与当前皮肤一致：
+     * - 深海夜航：确保有标记，宿主/第三方插件走深色分支；
+     * - 浅海晨汐：确保没有标记，避免宿主深色样式渗进浅色皮肤；
+     * - 默认：恢复宿主自己的状态。
+     */
+    function syncHostDarkMarker(skin) {
+      if (typeof document === 'undefined' || document.body === null || document.body === undefined) return;
+      const body = document.body;
+      const wantDark = skin === 'night' ? true : skin === 'sea' ? false : hostColorSchemeDark;
+      if (wantDark && !body.hasAttribute('data-ds-dark-theme')) body.setAttribute('data-ds-dark-theme', '');
+      else if (!wantDark && body.hasAttribute('data-ds-dark-theme')) body.removeAttribute('data-ds-dark-theme');
+    }
 
     // 经宿主资源映射加载同包 SVG，桌面端和浏览器均使用同一幅等深线图。
     const seaContourUrl = require.asset('plugins/dsh-studio/assets/sea-contours-f3ab83f1dbe3.svg');
 
     /** 样式限定在皮肤标记下，切换回默认主题时随样式节点一起移除。 */
-    function seaSkinCss() {
+    function builtInSkinCss() {
       return `
-html[data-dsh-studio-sea],
-html[data-dsh-studio-sea] body {
+html[data-dsh-studio-skin='sea'],
+html[data-dsh-studio-skin='sea'] body {
   color-scheme: light;
   background-color: #fafcfb !important;
   --dsw-alias-bg-base: #fafcfb !important;
@@ -2114,13 +2137,130 @@ html[data-dsh-studio-sea] body {
   --dsw-alias-state-error-primary: #b84a4a !important;
 }
 
+/* 深海夜航使用独立的颜色标记，不写入宿主外观偏好。菜单、弹窗和右栏共用层级色。 */
+html[data-dsh-studio-skin='night'],
+html[data-dsh-studio-skin='night'] body {
+  color-scheme: dark;
+  color: #e7eff6;
+  background-color: #0e1723 !important;
+  --dsw-alias-bg-base: #0e1723 !important;
+  --dsw-alias-bg-layer-1: #111f2d !important;
+  --dsw-alias-bg-layer-2: #172939 !important;
+  --dsw-alias-bg-layer-3: #203849 !important;
+  --dsw-alias-bg-overlay: #192d3e !important;
+  --dsw-alias-bg-module-platform: #111f2d !important;
+  --dsw-alias-bg-multi-select: #203c51 !important;
+  --dsw-alias-card-fill: #152635 !important;
+  --dsw-alias-card-fill-hover: #1c3346 !important;
+  --dsw-alias-card-tile-fill: #1a2e40 !important;
+  --dsw-specific-menu: #172939 !important;
+
+  /* 宿主把菜单/浮层底面拆成独立 token，深色外观下才切换；深色皮肤需要一并覆盖。 */
+  --dsw-menu-surface-fill: rgb(23 41 57 / 82%) !important;
+  --dsw-alias-menu-group-header-fill: rgb(23 41 57 / 94%) !important;
+  --dsw-alias-bg-mask-1: rgb(0 0 0 / 50%) !important;
+  --dsw-alias-bg-mask-2: rgb(0 0 0 / 20%) !important;
+  --dsw-alias-bg-mask-3: rgb(0 0 0 / 48%) !important;
+  --dsw-alias-bg-mask-drop: rgb(39 39 48 / 70%) !important;
+  --dsw-alias-toast-bg: #1b3143 !important;
+  --dsw-alias-toast-label: #e7eff6 !important;
+  --dsw-alias-toast-action: #74c5ff !important;
+  --dsw-alias-tooltip-bg: #1f3749 !important;
+  --dsw-alias-tooltip-label: #e7eff6 !important;
+  --dsw-alias-tooltip-key-bg: #31506a !important;
+  --dsw-alias-label-primary-dimmed: #a9c0cf !important;
+  --dsw-specific-selector: #162838 !important;
+  --dsw-specific-input-major: #172634 !important;
+  --dsw-specific-login-input: #172634 !important;
+  --dsw-specific-bubble: #1b3449 !important;
+  --dsw-specific-bubble-highlight: #24465d !important;
+  --dsw-alias-markdown-code-block: #172939 !important;
+  --dsw-alias-markdown-code-block-banner: #172939 !important;
+  --dsw-alias-markdown-inline-code: #1a2a39 !important;
+  --dsw-alias-label-primary: #e7eff6 !important;
+  --dsw-alias-label-primary-bluish: #d7e7f2 !important;
+  --dsw-alias-label-secondary: #b3c7d6 !important;
+  --dsw-alias-label-tertiary: #96b0c3 !important;
+  --dsw-alias-label-caption: #9db4c6 !important;
+  --dsw-alias-label-dimmed: #829bac !important;
+  --dsw-alias-label-primary-inverted: #0c1e2e !important;
+  --dsw-alias-label-on-color: #fff !important;
+  --dsw-alias-label-primary-foreground: #102332 !important;
+  --dsw-alias-hovercard-bg: #192d3e !important;
+  --dsw-alias-hovercard-label-primary: #e7eff6 !important;
+  --dsw-alias-hovercard-label-secondary: #b3c7d6 !important;
+  --dsw-alias-hovercard-label-tertiary: #96b0c3 !important;
+  --dsw-alias-menu-icon: #b3c7d6 !important;
+  --dsw-alias-border-l1: #203241 !important;
+  --dsw-alias-border-l2: #304858 !important;
+  --dsw-alias-border-l2-darkmode-thin: #304858 !important;
+  --dsw-alias-border-l3: #395568 !important;
+  --dsw-alias-border-l4: #48687e !important;
+  --dsw-alias-interactive-bg-hover: #193246 !important;
+  --dsw-alias-interactive-bg-hover-solid: #193246 !important;
+  --dsw-alias-interactive-bg-active: #203c51 !important;
+  --dsw-alias-brand-text: #deebf5 !important;
+  --dsw-alias-brand-primary: #44d6e3 !important;
+  --dsw-alias-state-business-primary: #44d6e3 !important;
+  --dsw-alias-link: #74c5ff !important;
+  --dsw-alias-button-info-fill: #3377fb !important;
+  --dsw-alias-button-info-hover: #4388ff !important;
+  --dsw-alias-button-elevated-fill: #102333 !important;
+  --dsw-alias-button-floating-fill: #1d3244 !important;
+  --dsw-alias-button-floating-hover: #284659 !important;
+  --dsw-alias-button-primary-fill: #d6e6ef !important;
+  --dsw-alias-button-primary-hover: #edf6fa !important;
+  --dsw-alias-button-tool-bar-fill: #1a3042 !important;
+  --dsw-alias-button-tool-bar-hover: #264255 !important;
+  --dsw-alias-state-success-primary: #42cd82 !important;
+  --dsw-alias-state-warn-primary: #e6b262 !important;
+  --dsw-alias-state-error-primary: #ff9498 !important;
+  --dsw-specific-sidebar-fill: #0c1e2e !important;
+  --dsw-specific-sidebar-glass-fill: #102333 !important;
+  --dsw-specific-sidebar-glass-hover: #193246 !important;
+  --dsw-specific-sidebar-glass-collapsed-fill: #0c1e2e !important;
+  --dsw-specific-sidebar-glass-collapsed-hover: #193246 !important;
+  --dsw-alias-scrollbar-bg-l2: #385164 !important;
+  --dsw-alias-scrollbar-hover-l2: #58758b !important;
+  --shiki-token-constant: #60bcff;
+  --shiki-token-string: #8cdd9b;
+  --shiki-token-comment: #94acbf;
+  --shiki-token-keyword: #ff9aba;
+  --shiki-token-parameter: #ffbd7d;
+  --shiki-token-function: #c8a9ff;
+  --shiki-token-string-expression: #a9e4ac;
+  --shiki-token-punctuation: #c7d7e3;
+  --shiki-token-link: #74c5ff;
+}
+
+@media (forced-colors: none) {
+  /* 给预览中的侧栏地形换成暗部青光，复用同一张透明图的轮廓。 */
+  html[data-dsh-studio-skin='night'] [class*='_root']:has(> [class*='_logoRow'][data-window-drag]) {
+    background: linear-gradient(rgb(12 30 46 / 60%), rgb(12 30 46 / 60%)),
+      url("${seaContourUrl}") left bottom / 100% min(40.5%, 370px) no-repeat, #0c1e2e !important;
+  }
+
+  html[data-dsh-studio-skin='night'] [data-phase] [data-slot='conversation.header'] > header {
+    background-image: radial-gradient(ellipse at 95% 0%, #0b3451, transparent 65%);
+  }
+
+  html[data-dsh-studio-skin='night'] [data-composer-card] {
+    --dsw-elevation-stroke-color: #41657b;
+  }
+
+  html[data-dsh-studio-skin='night'] [data-composer-card] button[class*='_primary'][aria-busy] {
+    background: linear-gradient(155deg, #5397ff 0%, #3377fb 55%, #205ece);
+    box-shadow: inset 0 1px 1px rgb(203 228 255 / 48%), 0 1px 3px #07121d;
+  }
+}
+
 /* 外层列负责分隔线，Windows 的侧栏内容根节点会另绘一层不透明底色。 */
-html[data-dsh-studio-sea] [class*='sidebarCol'] {
+html[data-dsh-studio-skin='sea'] [class*='sidebarCol'] {
   border-right-color: #d3e6e6 !important;
 }
 
 /* 用直属品牌行识别可见侧栏表面，直接在该表面绘制等深线，兼容插槽包装层。 */
-html[data-dsh-studio-sea] [class*='_root']:has(> [class*='_logoRow'][data-window-drag]) {
+html[data-dsh-studio-skin='sea'] [class*='_root']:has(> [class*='_logoRow'][data-window-drag]) {
   background-color: var(--dsw-specific-sidebar-fill) !important;
   background-image: url("${seaContourUrl}") !important;
   background-size: 100% min(40.5%, 370px) !important;
@@ -2129,31 +2269,31 @@ html[data-dsh-studio-sea] [class*='_root']:has(> [class*='_logoRow'][data-window
 }
 
 /* 宿主用纯色渐变遮住列表底端；只淡出滚动内容，让背后的等深线保持连续。 */
-html[data-dsh-studio-sea] [data-sidebar-scrollport] {
+html[data-dsh-studio-skin] [data-sidebar-scrollport] {
   mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
 }
 
-html[data-dsh-studio-sea] [data-sidebar-scrollport] ~ [class*='_scrollFade'] {
+html[data-dsh-studio-skin] [data-sidebar-scrollport] ~ [class*='_scrollFade'] {
   background: none !important;
 }
 
 /* 宿主的会话树用 aria-selected 标记当前行，搜索结果沿用同一语义。 */
-html[data-dsh-studio-sea] [class*='sidebarCol'] [role='treeitem'][aria-selected='true'],
-html[data-dsh-studio-sea] [class*='sidebarCol'] [aria-current='page'],
-html[data-dsh-studio-sea] [class*='sidebarCol'] [data-active='true'],
-html[data-dsh-studio-sea] [class*='sidebarCol'] [data-selected='true'] {
+html[data-dsh-studio-skin] [class*='sidebarCol'] [role='treeitem'][aria-selected='true'],
+html[data-dsh-studio-skin] [class*='sidebarCol'] [aria-current='page'],
+html[data-dsh-studio-skin] [class*='sidebarCol'] [data-active='true'],
+html[data-dsh-studio-skin] [class*='sidebarCol'] [data-selected='true'] {
   background-color: var(--dsw-alias-interactive-bg-active) !important;
 }
 
 /* 预览图中余额使用深墨色，空闲时段保留绿色。 */
-html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='muted']) .dsws-badgeDot {
+html[data-dsh-studio-skin] .dsws-badge[data-tone='balance']:not([data-state='muted']) .dsws-badgeDot {
   background: var(--dsw-alias-label-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-label-primary) 20%, transparent);
 }
 
 /* 只处理输入卡片的主操作。用内侧亮边和下沿暗部塑形，保留宿主的图标与发送中状态。 */
 @media (forced-colors: none) {
-  html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy] {
+  html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy] {
     background:
       radial-gradient(ellipse at 30% 4%, rgb(149 246 230 / 34%), transparent 58%),
       linear-gradient(155deg, #208e94, #006f78 53%, #00525e);
@@ -2166,29 +2306,29 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
   }
 
   @media (hover: hover) {
-    html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy]:enabled:hover {
+    html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy]:enabled:hover {
       filter: brightness(1.08);
     }
   }
 
-  html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy]:enabled:active {
+  html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy]:enabled:active {
     scale: var(--dsws-send-pressed-scale, 0.96);
     box-shadow: inset 0 2px 3px rgb(0 50 60 / 45%), 0 0 0 1px rgb(0 83 90 / 30%);
   }
 
-  html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy]:focus-visible {
+  html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy]:focus-visible {
     outline: 2px solid #006f78;
     outline-offset: 3px;
   }
 
-  html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy]:disabled:not([data-sending]) {
+  html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy]:disabled:not([data-sending]) {
     background: linear-gradient(155deg, #a8cbca, #80aaae);
     opacity: 1;
     box-shadow: inset 0 1px 1px rgb(255 255 255 / 55%), 0 0 0 1px rgb(37 103 110 / 14%);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    html[data-dsh-studio-sea] [data-composer-card] button[class*='_primary'][aria-busy] {
+    html[data-dsh-studio-skin='sea'] [data-composer-card] button[class*='_primary'][aria-busy] {
       transition: none;
       --dsws-send-pressed-scale: 1;
     }
@@ -2200,11 +2340,12 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
     /** 应用 / 清除内置主题皮肤。 */
     function applySkin(skin) {
       if (typeof document === 'undefined') return;
-      const sea = skin === 'sea';
+      const custom = skin !== 'default' && THEME_SKIN_OPTIONS.includes(skin);
       let style = document.getElementById(SKIN_STYLE_ID);
-      if (!sea) {
+      if (!custom) {
         if (style !== null) style.remove();
         if (document.documentElement !== null) document.documentElement.removeAttribute(SKIN_ATTR);
+        syncHostDarkMarker('default');
         return;
       }
       if (style === null) {
@@ -2212,8 +2353,11 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
         style.id = SKIN_STYLE_ID;
         document.head.appendChild(style);
       }
-      style.textContent = seaSkinCss();
-      if (document.documentElement !== null) document.documentElement.setAttribute(SKIN_ATTR, '');
+      // 每次都重写内容：热更新或旧样式节点可能只带部分皮肤规则。
+      style.textContent = builtInSkinCss();
+      if (document.documentElement !== null) document.documentElement.setAttribute(SKIN_ATTR, skin);
+      // 深海夜航要触发宿主深色分支；浅海晨汐则要移走深色标记，避免宿主/插件的深色样式渗进来。
+      syncHostDarkMarker(skin);
     }
 
     /**
@@ -3112,7 +3256,7 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
                 'select',
                 {
                   className: 'dsws-select',
-                  value: settings.themeSkin === 'sea' ? 'sea' : 'default',
+                  value: settings.themeSkin,
                   'aria-label': t('theme.skinLabel'),
                   'aria-disabled': settingsBusy ? 'true' : undefined,
                   onChange: (event) => {
@@ -3122,6 +3266,7 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
                 },
                 h('option', { value: 'default' }, t('theme.skinDefault')),
                 h('option', { value: 'sea' }, t('theme.skinSea')),
+                h('option', { value: 'night' }, t('theme.skinNight')),
               ),
             ),
           ),
@@ -3287,6 +3432,8 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-studio: dictionaries');
         const t = ctx.locale.bind(NS);
         const settingsStore = createSettingsStore();
+        // 初始值用于「默认」皮肤恢复宿主自己的深色标记。
+        hostColorSchemeDark = typeof document !== 'undefined' && document.body !== null && document.body !== undefined && document.body.hasAttribute('data-ds-dark-theme');
         // `remote.account` 是可选服务：没有账户控制器的部署里插件照常工作，余额显示降级为「暂不可用」。
         const accountRef = { current: undefined };
         const balanceStore = createBalanceStore(ctx, accountRef);
@@ -3343,9 +3490,15 @@ html[data-dsh-studio-sea] .dsws-badge[data-tone='balance']:not([data-state='mute
         ctx.effect(() => {
           const sync = () => applySkin(settingsStore.get().themeSkin);
           const unsubscribe = settingsStore.subscribe(sync);
+          // 宿主切换浅/深色外观时重新同步：深色皮肤需要补回标记，默认/浅色皮肤需要让出标记。
+          const offTheme = ctx.on('theme/change', (snapshot) => {
+            hostColorSchemeDark = snapshot !== null && typeof snapshot === 'object' && snapshot.active !== undefined && snapshot.active.colorScheme === 'dark';
+            sync();
+          });
           sync();
           return () => {
             unsubscribe();
+            offTheme();
             applySkin('default');
           };
         }, 'dsh-studio: theme skin');

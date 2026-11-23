@@ -44,8 +44,8 @@ const SETTING_KEYS = ['pricingIndicator', 'balanceIndicator', 'balanceRefreshMs'
 /** 余额自动更新间隔的可选值（毫秒）；0 表示关闭。 */
 const BALANCE_REFRESH_OPTIONS = [0, 10000, 30000, 60000, 300000]
 
-/** 内置主题皮肤：default 使用 DSH 当前主题，sea 使用「浅海晨汐」浅色皮肤。 */
-const THEME_SKIN_OPTIONS = ['default', 'sea']
+/** 内置主题皮肤：default 使用 DSH 当前主题，sea 为浅海晨汐，night 为深海夜航。 */
+const THEME_SKIN_OPTIONS = ['default', 'sea', 'night']
 
 /** 默认设置：提示与主题皮肤都默认关闭，由用户在工作台里打开。 */
 const DEFAULT_SETTINGS = {
@@ -182,7 +182,7 @@ async function handleSettings(ctx, req, res) {
         return
       }
     } else if (key === 'themeSkin') {
-      // 主题皮肤：默认或内置的浅海晨汐。
+      // 仅接受客户端提供的主题标识，旧设置继续使用原值。
       if (!THEME_SKIN_OPTIONS.includes(payload[key])) {
         sendJson(res, 400, { error: `${key} must be one of ${THEME_SKIN_OPTIONS.join(', ')}` })
         return
